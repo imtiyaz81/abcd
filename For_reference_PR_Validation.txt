@@ -1,0 +1,308 @@
+/* Two variables need to be defined in job configuration
+1. PULL_REQUEST_URL - vaule pass from JIRA
+2. PULL_REQUEST_ID - Value pass from JIRA
+3. PRDESTINATION 
+4. SFDC_ANT_TARGET - ant target "checkonly" checks deployment and ant target "sonar" check code quality
+5. VELOCITY_ANT_TARGET - ant target "packBuildFile" checks the velocity deployment
+6. sonarUrl - set sonar url like https://sonar.kpn.org
+7. sonarProjKey - set sonar project key like zmsmeeSIT
+8. RECIPIENT_LIST - if need to send mail to complete team
+9. BRANCH - source branch
+*/
+
+def error_message
+def merge_check = "FALSE"
+def exact_error_details
+def props
+def PULL_REQUEST_SOURCE_SHA
+node('ZM_SMEE_W6489.KPNNL.LOCAL'){
+	try{
+		stage('Clean Workspace'){
+			    deleteDir()
+			    //notifyDeployment("STARTED",${error_message})
+			   // notifyDeployment(currentBuild.result,"${error_message}","${merge_check}")
+			    currentBuild.setDescription("<a href='${env.PULL_REQUEST_URL}'> PR #${env.PULL_REQUEST_ID} </a>")
+		    }
+		stage('Start Email'){
+			
+			  def subject = "Job '${env.JOB_NAME}' with build number '${env.BUILD_NUMBER}' is started"
+			  details = """<p>Hi All,</br></br>The PR validation for Pull Request ID:  <b>${env.PULL_REQUEST_ID}</b> is STARTED <br>Pull Request URL:  <b>${env.PULL_REQUEST_URL}</b><br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+				<p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>"""
+			    def recipient = "${env.RECIPIENT_LIST}"
+				  emailext (
+				  mimeType: 'text/html',
+				  subject: subject,
+				  body: details,
+				  to: recipient
+				) 
+			
+			}
+		stage('SVN Checkout'){
+			checkout([$class: 'SubversionSCM',
+                    additionalCredentials: [],
+                    excludedCommitMessages: '',
+                    excludedRegions: '',
+                    excludedRevprop: '',
+                    excludedUsers: '',
+                    filterChangelog: false,
+                    ignoreDirPropChanges: false,
+                    includedRegions: '',
+                    locations: [[cancelProcessOnExternalsFail: true,
+                        credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b',
+                        depthOption: 'infinity',
+                        ignoreExternalsOption: true,
+                        local: 'resolve_conflicts_pull_request',
+                        remote: 'https://svn.kpn.org/l3_space/p_cicd/SMEE_Cordys/trunk/platform/resolve_conflicts_pull_request'],
+                        [cancelProcessOnExternalsFail: true,
+                        credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b',
+                        depthOption: 'infinity',
+                        ignoreExternalsOption: true,
+                        local: 'general_config',
+                        remote: 'https://svn.kpn.org/l3_space/p_cicd/SMEE_Cordys/trunk/platform/general_config']],
+                        quietOperation: true,
+                        workspaceUpdater: [$class: 'UpdateUpdater']])
+			}
+			stage('PR-Conflict Check'){
+					try{
+					bat '''
+						perl resolve_conflicts_pull_request\\bin\\resolve_conflicts_pull_request.pl --basedir "%WORKSPACE%\\resolve_conflicts_pull_request" --prid "%PULL_REQUEST_ID%" --build "%BUILD_NUMBER%" --application "SFDC"
+					'''
+					}
+					catch(err){
+					echo "iner catch block"
+					//error_message = err.getMessage()
+					merge_check = "TRUE"
+					exact_error_details = """Merge conflict found for ID ${env.PULL_REQUEST_ID}, URL ${env.PULL_REQUEST_URL}"""
+					currentBuild.result = "FAILURE"
+					throw err
+					}
+				}
+			stage('GIT Checkout SFDC'){
+				checkout changelog: false, 
+						poll: false, 
+						scm: [$class: 'GitSCM', 
+							branches: [[name: 'refs/heads/$PULL_REQUEST_ID/merge']], 
+							doGenerateSubmoduleConfigurations: false, 
+							extensions: [[$class: 'IgnoreNotifyCommit'], 
+							[$class: 'SubmoduleOption', 
+							disableSubmodules: false, 
+							parentCredentials: true, 
+							recursiveSubmodules: true, 
+							reference: '', 
+							trackingSubmodules: false], 
+							[$class: 'WipeWorkspace']], 
+							gitTool: 'SFDC_GIT', 
+							submoduleCfg: [], 
+							userRemoteConfigs: [[credentialsId: 'fc380c55-917c-46c1-a92c-b0a8fd225003', 
+								refspec: '+refs/pull-requests/*:refs/remotes/origin/*', 
+								url: 'https://sys_sfdc@git.kpn.org/scm/vlo/p_esmee_salesforce.git']]]			
+				}
+			stage('PR Validation'){
+				try{
+						bat '''
+						echo #!/bin/bash > script
+						echo if [[ "%PRDESTINATION%" =~ ^^develop$ ]] >> script
+						echo then >> script
+						echo     echo "ENVIRONMENT : SITT" >> script
+						echo 	echo ENVIRONMENT=SIT ^> propfile >> script
+						echo     exit 0 >> script
+						echo elif [[ "%PRDESTINATION%" =~ ^^release/.*$ ]] >> script
+						echo then >> script
+						echo     echo "ENVIRONMENT : PRE-PROD" >> script
+						echo 	echo ENVIRONMENT=PRE-PROD ^> propfile >> script
+						echo     exit 0 >> script
+						echo elif [[ "%PRDESTINATION%" =~ ^^master$ ]] >> script
+						echo then >> script
+						echo     echo "ENVIRONMENT : PRE-PROD" >> script
+						echo 	echo ENVIRONMENT=PRE-PROD ^> propfile >> script
+						echo     exit 0 >> script
+						echo else >> script
+						echo     echo "PRDESTINATION : $PRDESTINATION" >> script
+						echo     echo "[ERROR]: Invalid Destination Branch" >> script
+						echo     exit 1 >> script
+						echo fi >> script
+
+						C:/Progra~1/Git/bin/bash.exe script
+						if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+						set PULL_REQUEST_SOURCE_BRANCH=origin/%PULL_REQUEST_ID%/from
+						FOR /F "tokens=* USEBACKQ" %%F IN (`git rev-parse %PULL_REQUEST_SOURCE_BRANCH%`) DO (
+						SET PULL_REQUEST_SOURCE_SHA=%%F
+						)
+						ECHO "PULL_REQUEST_SOURCE_SHA=%PULL_REQUEST_SOURCE_SHA%"
+						ECHO PULL_REQUEST_SOURCE_SHA=%PULL_REQUEST_SOURCE_SHA%>> propfile
+						'''
+						props = readProperties  file:'propfile'
+						PULL_REQUEST_SOURCE_SHA=props['PULL_REQUEST_SOURCE_SHA']
+						ENVIRONMENT=props['ENVIRONMENT']
+					   echo "pull request sha:  $PULL_REQUEST_SOURCE_SHA"
+					   echo "environment:  ${ENVIRONMENT}"
+				
+											/* 
+						Run SFDC Deployment Check
+						This step need to test
+						*/
+						withAnt(installation: 'SFDC_ANT') {
+							 bat "ant.bat -file D:/sfdc_workspace/ant_workspace/build.xml ${env.SFDC_ANT_TARGET} -DENVIRONMENT=${ENVIRONMENT} -DBUILD_NUMBER=${env.BUILD_NUMBER} -DDEPLOYROOT=${env.WORKSPACE}\\src"
+						 }
+						 withAnt(installation: 'SFDC_ANT') {
+							 bat "ant.bat -file ${env.WORKSPACE}/vlocity/build.xml ${env.VELOCITY_ANT_TARGET} -DENVIRONMENT=${ENVIRONMENT}"
+						 }
+				}
+				catch(err){
+					echo "iner catch block"
+					exact_error_details = "PR validation got failed for Pull Request ID ${env.PULL_REQUEST_ID}, URL ${env.PULL_REQUEST_URL}"
+					currentBuild.result = "FAILURE"
+					throw err
+					}
+			}
+			stage('SONAR QUALITY GATE'){
+				try{
+					echo "#### SONAR QUALITY GATE WILL CHECK ONLY IF THE ENVIRONMENT IS SIT ####"
+						echo "####### ENVIRONMENT FOR CURRENT BUILD IS = ${ENVIRONMENT}"
+						echo "#########################################################"
+						if ("${ENVIRONMENT}" == 'SIT')
+						{						
+							powershell '''
+							Write-Host "##### SONAR QUALITY GATE RESULT ######"
+							Invoke-RestMethod -Uri "https://sonar.kpn.org/api/qualitygates/project_status?projectKey=zmsmeeSIT"
+							Write-Host "######################################"
+							Invoke-RestMethod -Uri "https://sonar.kpn.org/api/qualitygates/project_status?projectKey=zmsmeeSIT" > output.txt
+							$content=""
+							foreach ($service in get-content output.txt)
+							{
+							$content="$content $service"
+							}
+							$content = $content -replace 's',''
+							echo $content
+							$content = $content -replace '{',' ' -replace ';',' '
+							$out = $content -split " " | where {$_ -like "*ERROR"} | select -First 1
+							echo $out
+								If($out) {
+									Write-Host "SONAR QUALITY GATE FAILED, SO MARKED BUILD AS FAILED"
+									exit 1
+									} 
+									else 
+									  {
+									  Write-Host "flase"
+									  }
+							'''		
+						}
+				}
+				catch(err){
+					echo "iner catch block"
+					exact_error_details = "Sonar quality gate failed for Pull Request ${env.PULL_REQUEST_ID} URL ${env.PULL_REQUEST_URL} Please check ${env.sonarUrl} for project key ${env.sonarProjKey}"
+					currentBuild.result = "FAILURE"
+					throw err
+					}
+			
+			}
+			
+		
+	}catch(err){
+			currentBuild.result = "FAILURE"
+		    throw err
+	}finally{
+	//notifyDeployment(currentBuild.result,"${exact_error_details}")
+	notifyDeployment(currentBuild.result,"${exact_error_details}","${merge_check}")
+	notifybuildstatus("${PULL_REQUEST_SOURCE_SHA}",currentBuild.result)
+	}
+}
+
+
+		def notifybuildstatus(String SOURCE_SHA, String buildStatus) {
+                    // build status of null means successful
+                        buildStatus =  buildStatus ?: 'SUCCESSFUL'
+                         if (buildStatus == 'SUCCESSFUL') {
+                               currentBuild.result = "SUCCESS"
+                                echo "currentbuildStatus: $currentBuild.result"
+                              }
+				        notifyBitbucket commitSha1: "${SOURCE_SHA}", 
+                        	considerUnstableAsSuccess: false, 
+                        	credentialsId: '', 
+                        	disableInprogressNotification: true, 
+                        	ignoreUnverifiedSSLPeer: true, 
+                        	includeBuildNumberInKey: false, 
+                        	prependParentProjectKey: false, 
+                        	projectKey: '', 
+                        	stashServerBaseUrl: ''
+			}
+		
+	//	def notifyDeployment(String buildStatus, String error_message) {
+	    def notifyDeployment(String buildStatus, String error_message, String merge_check) {
+			 def details
+			 def stagename
+			 def recipient = "${env.RECIPIENT_LIST}"
+			 def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+			 echo "##########$buildStatus"
+			 
+			if (buildStatus == 'FAILURE') {
+				color = 'RED'
+				stagename= 'Failure Mail'
+				if (merge_check == 'TRUE') {
+					details = """<p>Hi All,</br></br>
+					This pull request has conflicts.<br>
+						You must resolve the conflicts by manually merging "${env.PRDESTINATION}" into "${env.BRANCH}" branch. After the conflicts are resolved you will be able to merge the pull request.<br><br>
+						STEP 1: Update Remote branches in local.<br></p>
+						<table bgcolor="#E6E6E6"><tr><td>
+						<b>
+						git fetch origin
+						</b>
+						</td></tr></table><br>
+						STEP 2: Update Target branch in local.<br></p>
+						<table bgcolor="#E6E6E6"><tr><td>
+						<b>
+						git checkout "${env.PRDESTINATION}"<br>
+						git pull origin "${env.PRDESTINATION}"<br>
+						</b>
+						</td></tr></table><br>
+						STEP 3: Checkout the source branch and merge in the changes from the target branch. Resolve conflicts.<br></p>
+						<table bgcolor="#E6E6E6"><tr><td>
+						<b>
+						git checkout "${env.BRANCH}"<br>
+						git pull origin "${env.BRANCH}"<br>
+						git pull origin "${env.PRDESTINATION}"<br>
+						</b>
+						</td></tr></table>
+						<p>
+						Step 4: After the merge conflicts are resolved, stage the changes accordingly, commit the changes and push.<br>
+						<table bgcolor="#E6E6E6"><tr><td>
+						<b>
+						git commit -m "[JIRA-ID]:[Merge message]"<br>
+						git push origin HEAD<br>
+						</b>
+						</td></tr></table>
+						</p>
+					</br><p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>
+					<br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>"""
+				} else {
+				
+				details = """<p>Hi All,</br></br>The PR validation for <b><font size="3" color="$color">${buildStatus}</font></b>Pull Request ID:  <b>${env.PULL_REQUEST_ID}<br>Error Message:  <b>${error_message}</b><br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+				<p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>"""
+				}
+			  } else if (buildStatus == null) {
+				color = 'GREEN'
+				buildStatus = 'SUCCESSFUL'
+				stagename= 'Success Mail'
+				details = """<p>Hi All,</br></br>The PR validation for Pull Request ID:  <b>${env.PULL_REQUEST_ID}</b><b><font size="3" color="$color">${buildStatus}</font></b><br>Pull Request URL:  <b>${env.PULL_REQUEST_URL}</b><br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+				<p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>"""
+			  }
+			  else if (buildStatus == 'SUCCESS') {
+				color = 'GREEN'
+				buildStatus = 'SUCCESSFUL'
+				stagename= 'Success Mail'
+				details = """<p>Hi All,</br></br>The PR validation for Pull Request ID:  <b>${env.PULL_REQUEST_ID}</b><b> is <font size="3" color="$color">${buildStatus}</font></b><br>Pull Request URL:  <b>${env.PULL_REQUEST_URL}</b><br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+				<p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>"""
+			  }
+			   
+			  stage("$stagename") {
+				emailext (
+				  mimeType: 'text/html',
+				  subject: subject,
+				  body: details,
+				  to: recipient
+				) 
+				}
+		}
+			
+			

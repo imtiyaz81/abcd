@@ -1,0 +1,103 @@
+node('ZM_SMEE_W6489.KPNNL.LOCAL'){
+
+	def jirakey = "$params.jirakey"
+	def user_id = "$params.user_id"
+	try {	
+		stage('SVN Checkout'){
+			checkout([$class: 'SubversionSCM', 
+			additionalCredentials: [], 
+			excludedCommitMessages: '', 
+			excludedRegions: '', 
+			excludedRevprop: '', 
+			excludedUsers: '', 
+			filterChangelog: false, 
+			ignoreDirPropChanges: false, 
+			includedRegions: '', 
+			locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+			depthOption: 'infinity', 
+			ignoreExternalsOption: true, local: 'create_pull_request', 
+			remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/create_pull_request']], 
+			workspaceUpdater: [$class: 'UpdateUpdater']])
+				
+			checkout([$class: 'SubversionSCM', 
+			additionalCredentials: [], 
+			excludedCommitMessages: '', 
+			excludedRegions: '', 
+			excludedRevprop: '', 
+			excludedUsers: '', 
+			filterChangelog: false, 
+			ignoreDirPropChanges: false, 
+			includedRegions: '', 
+			locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+			depthOption: 'infinity', 
+			ignoreExternalsOption: true, local: 'general_config', 
+			remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/general_config']], 
+			workspaceUpdater: [$class: 'UpdateUpdater']])
+				
+			checkout([$class: 'SubversionSCM', 
+			additionalCredentials: [], 
+			excludedCommitMessages: '', 
+			excludedRegions: '', 
+			excludedRevprop: '', 
+			excludedUsers: '', 
+			filterChangelog: false, 
+			ignoreDirPropChanges: false, 
+			includedRegions: '', 
+			locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+			depthOption: 'infinity', 
+			ignoreExternalsOption: true, local: 'jira_relbuild_verifier', 
+			remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/jira_relbuild_verifier']], 
+			workspaceUpdater: [$class: 'UpdateUpdater']])
+		}
+
+		stage('Jira Rebuild Verify'){
+			bat '''
+				perl jira_relbuild_verifier\\bin\\jira_relbuild_verifier.pl --basedir "%WORKSPACE%\\jira_relbuild_verifier" --jirakey "%jirakey%" --customfield "customfield_14801" --customvalue "build"
+			'''
+			
+		}
+		
+		stage('Create PULL Request'){
+			bat '''
+				perl create_pull_request\\bin\\create_pull_request.pl --basedir "%WORKSPACE%\\create_pull_request" --jirakey "%jirakey%" --application "VIB" --userid "%user_id%"
+			'''
+			
+		}
+	} catch (e) {
+		// If there was an exception thrown, the build failed
+		currentBuild.result = "FAILED"
+		throw e
+	} finally {
+		// Success or failure, always send notifications
+		notifyStatus(currentBuild.result)
+	}
+}
+
+def notifyStatus(String buildStatus) {
+	 def details
+	 def recipient = "${user_id},imtiyaz.hossain@kpn.com,sudhakar.karenavar@kpn.com"
+	 def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+	 echo "##########$buildStatus"
+	 
+	if (buildStatus == 'FAILURE') {
+		color = 'RED'
+		stagename= 'Failure Mail'
+		details = """<p>Hi All,</br></br>The pull request creation operation is failed for Branch <b>${jiraKey}</b></br><p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p><br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+		"""
+	
+	} else if (buildStatus == null) {
+		color = 'GREEN'
+		buildStatus = 'SUCCESSFUL'
+		stagename= 'Success Mail'
+		details = """<p>Hi All,</br></br>The pull request has been creatted for Branch <b>${jiraKey}</b></br><p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p><br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+		"""
+	}
+	stage("$stagename") {
+		emailext (
+		  mimeType: 'text/html',
+		  subject: subject,
+		  body: details,
+		  to: recipient
+		) 
+	}
+}

@@ -1,0 +1,322 @@
+/* Two variables need to be defined in job configuration
+1. PULL_REQUEST_URL - vaule pass from JIRA
+2. PULL_REQUEST_ID - Value pass from JIRA
+3. PRDESTINATION - Value pass from JIRA
+
+*/
+
+node('ZM_SMEE_W6489.KPNNL.LOCAL'){
+
+	def pr_url = "$params.PULL_REQUEST_URL"
+	def pr_id = "$params.PULL_REQUEST_ID"
+	def pr_des = "$params.PRDESTINATION"
+	String credentialsId="b28100b8-2eed-45e4-8add-c66ab2e9dcad"
+	
+	stage('Clean Workspace'){
+		deleteDir()
+	    currentBuild.setDescription("<a href='${env.PULL_REQUEST_URL}'> PR #${env.PULL_REQUEST_ID} </a>")
+	}
+	stage('SVN Checkout'){
+		checkout([$class: 'SubversionSCM', 
+		additionalCredentials: [], 
+		excludedCommitMessages: '', 
+		excludedRegions: '', 
+		excludedRevprop: '', 
+		excludedUsers: '', 
+		filterChangelog: false, 
+		ignoreDirPropChanges: false, 
+		includedRegions: '', 
+		locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+		depthOption: 'infinity', 
+		ignoreExternalsOption: true, local: 'resolve_conflicts_pull_request', 
+		remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/resolve_conflicts_pull_request']], 
+		workspaceUpdater: [$class: 'UpdateUpdater']])
+			
+		checkout([$class: 'SubversionSCM', 
+		additionalCredentials: [], 
+		excludedCommitMessages: '', 
+		excludedRegions: '', 
+		excludedRevprop: '', 
+		excludedUsers: '', 
+		filterChangelog: false, 
+		ignoreDirPropChanges: false, 
+		includedRegions: '', 
+		locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+		depthOption: 'infinity', 
+		ignoreExternalsOption: true, local: 'general_config', 
+		remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/general_config']], 
+		workspaceUpdater: [$class: 'UpdateUpdater']])
+			
+		checkout([$class: 'SubversionSCM', 
+		additionalCredentials: [], 
+		excludedCommitMessages: '', 
+		excludedRegions: '', 
+		excludedRevprop: '', 
+		excludedUsers: '', 
+		filterChangelog: false, 
+		ignoreDirPropChanges: false, 
+		includedRegions: '', 
+		locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+		depthOption: 'infinity', 
+		ignoreExternalsOption: true, local: 'jira_relbuild_verifier', 
+		remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/jira_relbuild_verifier']], 
+		workspaceUpdater: [$class: 'UpdateUpdater']])
+		
+		checkout([$class: 'SubversionSCM', 
+		additionalCredentials: [], 
+		excludedCommitMessages: '', 
+		excludedRegions: '', 
+		excludedRevprop: '', 
+		excludedUsers: '', 
+		filterChangelog: false, 
+		ignoreDirPropChanges: false, 
+		includedRegions: '', 
+		locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+		depthOption: 'infinity', 
+		ignoreExternalsOption: true, local: 'complete_pull_request', 
+		remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/complete_pull_request']], 
+		workspaceUpdater: [$class: 'UpdateUpdater']])
+		
+		checkout([$class: 'SubversionSCM', 
+		additionalCredentials: [], 
+		excludedCommitMessages: '', 
+		excludedRegions: '', 
+		excludedRevprop: '', 
+		excludedUsers: '', 
+		filterChangelog: false, 
+		ignoreDirPropChanges: false, 
+		includedRegions: '', 
+		locations: [[credentialsId: 'f18f297c-212d-4c31-8ce6-588cf337b56b', 
+		depthOption: 'infinity', 
+		ignoreExternalsOption: true, local: 'create_defect_subtask', 
+		remote: 'https://svn.kpn.org/l3_space/p_cicd/ZM_VD_Installbase/platform/create_defect_subtask']], 
+		workspaceUpdater: [$class: 'UpdateUpdater']])
+	}
+	
+	stage('Conflicts Verify'){
+		try{
+			bat "perl resolve_conflicts_pull_request\\bin\\resolve_conflicts_pull_request.pl --basedir \"%WORKSPACE%\\resolve_conflicts_pull_request\" --prid \"%PULL_REQUEST_ID%\" --build \"%BUILD_NUMBER%\" --application \"VIB\""
+			bat "mkdir tmp\\resolve_conflicts_pull_request\\"
+			bat "echo.>tmp\\resolve_conflicts_pull_request\\${BUILD_NUMBER}.html"
+		}catch(err){
+			echo "iner catch block"
+			//error_message = err.getMessage()
+			merge_check = "TRUE"
+			exact_error_details = """Merge conflict found for ID ${env.PULL_REQUEST_ID}, URL ${env.PULL_REQUEST_URL}"""
+			currentBuild.result = "FAILURE"
+			send_merge_conflict_email("${exact_error_details}")
+			throw err
+		}
+		
+	}
+	
+	stage('Git Checkout'){
+		
+		checkout([$class: 'GitSCM', 
+		branches: [[name: 'refs/heads/$PULL_REQUEST_ID/merge']], 
+		doGenerateSubmoduleConfigurations: false, 
+		extensions: [], gitTool: 'Default', submoduleCfg: [], 
+		userRemoteConfigs: [[credentialsId: 'c8dd5397-3417-4d03-84bb-f7b73498be56', 
+		url: 'https://sys_installbase@git.kpn.org/scm/kpnzmvd/p_installbase_vib.git']]])
+	}
+	stage('Validation')
+	{
+		bat '''
+			set PULL_REQUEST_SOURCE_BRANCH=origin/%PULL_REQUEST_ID%/from
+			FOR /F "tokens=* USEBACKQ" %%F IN (`git rev-parse %PULL_REQUEST_SOURCE_BRANCH%`) DO (
+			SET PULL_REQUEST_SOURCE_SHA=%%F
+			)
+			ECHO "PULL_REQUEST_SOURCE_SHA=%PULL_REQUEST_SOURCE_SHA%"
+			ECHO PULL_REQUEST_SOURCE_SHA=%PULL_REQUEST_SOURCE_SHA%> propsfile
+		'''
+		//load propsfile
+		props = readProperties  file:'propfile'
+		PULL_REQUEST_SOURCE_SHA=props['PULL_REQUEST_SOURCE_SHA']
+		echo "pull request sha:  $PULL_REQUEST_SOURCE_SHA"
+	}
+	//Above testing done
+	
+	stage('Artifactory Clean N Compile')
+	{
+	    def server = Artifactory.server 'artifactory'
+		def rtMaven = Artifactory.newMavenBuild()
+		rtMaven.tool = 'INSTALLBASE_MAVEN'
+		def buildInfo = rtMaven.run pom: 'VIB/pom.xml', goals: 'clean compile'
+		didSucceed = true
+	}
+	
+	stage(CPR Build)
+	{
+		def PULL_REQUEST_ID=${PULL_REQUEST_ID}
+		def project=${JOB_NAME}
+		def buildUrl=${BUILD_URL}
+		def buildNumber=${BUILD_NUMBER}
+		def BRANCH="origin/${PULL_REQUEST_ID}/from"
+		if (didSucceed){
+			//Code for complete pull request and need to call another pipeline line job named zm_installbase_vib_release_build
+			bat "perl complete_pull_request\\bin\\complete_pull_request.pl --basedir \"%WORKSPACE%\\complete_pull_request\" --prid \"%PULL_REQUEST_ID%\" --application \"VIB\""
+			load tmp/sprint
+		}
+		else{
+			//Code for job rel-jiraDefectLog-rel
+			bat "echo '%PULL_REQUEST_ID%' '%buildNumber%' '%project%' '%buildUrl%'"
+			bat "perl create_defect_subtask\bin\create_defect_subtask.pl --basedir '%WORKSPACE%\create_defect_subtask' --prid '%PULL_REQUEST_ID%' --jobname '%project%' --buildurl '%buildUrl%' --buildnumber '%buildNumber%' --application 'VIB'"
+			send_mail()
+		}
+	}
+	
+	//Now code for Job zm_installbase_vib_release_build. RB=Release_Build
+	
+	stage('RB-Git_Checkout'){
+		def branch_name = $params.PRDESTINATION
+		checkout([$class: 'GitSCM',
+		branches: [[name: "${branch_name}"]],
+		extensions: [],
+		submoduleCfg: [],
+		//refspec: "+refs/heads/${branch_name}:refs/remotes/origin/${branch_name}",
+		userRemoteConfigs: [[
+		credentialsId: "${credentialsId}",
+		url: 'ssh://git@git.kpn.org:7999/kpnzmvd/p_installbase_vib.git'
+		]])
+	}
+	try{
+		stage('RB-Maven Compile'){
+			withMaven(maven: 'INSTALLBASE_MAVEN') {
+			bat "mvn -f VIB/pom.xml clean install"
+			}
+		}
+		if(branch_name == "integration"){
+			stage('RB-Artifactory Upload'){
+				def server = Artifactory.server 'Installbase KPN Artifactory'
+
+				def uploadSpec = """{
+					"files": [
+						{
+							"pattern": "VIB/web/target/*.war",
+							"target": "B2B-snapshot-local/p_installbase/VIB/release/vib_release_s${env.SPRINT}_b${env.BUILD_NUMBER}/"
+						}
+					]
+				}"""
+				server.upload(uploadSpec)
+			}
+			stage('ARA Package Creation'){
+					
+				String artifactory_url="B2B-snapshot-local/p_installbase/VIB/release/vib_release_s${env.SPRINT}_b${env.BUILD_NUMBER}/vib.war"
+						  
+				build job: '/ZM_VD_Installbase/ZM_VD_Installbase_CD/INSTALLBASE_CREATE_PACKAGE_ARA', wait: true,parameters: [[$class: 'StringParameterValue', name: 'ARTIFACTORY_URL', value: "${artifactory_url}"],[$class: 'StringParameterValue', name: 'ARA_PKG_NAME', value: "vib_release_s${env.SPRINT}_b${env.BUILD_NUMBER}"],[$class: 'StringParameterValue', name: 'APP_NAME', value: "vib"]]
+						
+			}
+		}else{
+			println "IGNORE ARTIFACTORY FOR BRANCH : " + branch_name
+		}
+	}
+	catch (e) {
+		// If there was an exception thrown, the build failed
+		currentBuild.result = "FAILED"
+		throw e
+	} finally {
+			// Success or failure, always send notifications
+			jiraSubtask(currentBuild.result)
+	}
+}
+
+def jiraSubtask(String buildStatus = 'STARTED') {
+	// build status of null means successful
+	buildStatus =  buildStatus ?: 'SUCCESSFUL'
+
+	if (buildStatus == 'FAILURE') {
+		stage('Defect log'){
+			//build job: 'rel-jiraDefectLog-rel', wait: false,parameters: [[$class: 'StringParameterValue', name: 'PULL_REQUEST_ID', value: "${env.PULL_REQUEST_ID}"],[$class: 'StringParameterValue', name: 'project', value: "${env.JOB_NAME}"],[$class: 'StringParameterValue', name: 'buildUrl', value: "${env.BUILD_URL}"],[$class: 'StringParameterValue', name: 'buildNumber', value: "${env.BUILD_NUMBER}"],[$class: 'StringParameterValue', name: 'BRANCH', value: "${env.BRANCH}"]]
+			bat "echo '%PULL_REQUEST_ID%' '%buildNumber%' '%project%' '%buildUrl%'"
+			bat "perl create_defect_subtask\bin\create_defect_subtask.pl --basedir '%WORKSPACE%\create_defect_subtask' --prid '%PULL_REQUEST_ID%' --jobname '%project%' --buildurl '%buildUrl%' --buildnumber '%buildNumber%' --application 'VIB'"
+			send_mail()			
+		}
+	}
+	else if (buildStatus == 'SUCCESSFUL') {
+		// Default values
+		def color = 'GREEN'
+		def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+		def summary = "${subject} (${env.BUILD_URL})"
+		def details = """<p>The Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' status: <b><font size="3" color=${color}>${buildStatus}</font></b>.</p>
+			<p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>"""
+		def recipient = "${env.RECIPIENT}"
+    
+		emailext (
+		  mimeType: 'text/html',
+		  subject: subject,
+		  body: details,
+		  to: recipient
+		) 
+	}
+}
+def send_mail()
+{
+	def color = 'RED'
+	def subject = "${project} - BUILD #${buildNumber} - FAILED"
+	def details = """Hi ${author},
+				</br>
+				The Release Build for branch  <b>${BRANCH}</b> is <b><font size="3" color="red">FAILED</font></b>.
+				</br>
+				</br>
+				Regards,</br>
+				Jenkins """
+	def recipient = "imtiyaz.hossain@kpn.com,sudhakar.karenavar@kpn.com,ramesh.darekar@kpn.com"
+    
+	emailext (
+		mimeType: 'text/html',
+		subject: subject,
+		body: details,
+		to: recipient
+	) 
+}
+def send_merge_conflict_email(String error_message){
+
+	def details
+	def stagename = "Conflict Failure Email"
+	def recipient = "${env.RECIPIENT_LIST}"
+	def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+	details = """<p>Hi All,</br></br>
+		This pull request has conflicts.<br>
+		You must resolve the conflicts by manually merging "${env.PRDESTINATION}" into "${env.BRANCH}" branch. After the conflicts are resolved you will be able to merge the pull request.<br><br>
+		STEP 1: Update Remote branches in local.<br></p>
+		<table bgcolor="#E6E6E6"><tr><td>
+		<b>
+		git fetch origin
+		</b>
+		</td></tr></table><br>
+		STEP 2: Update Target branch in local.<br></p>
+		<table bgcolor="#E6E6E6"><tr><td>
+		<b>
+		git checkout "${env.PRDESTINATION}"<br>
+		git pull origin "${env.PRDESTINATION}"<br>
+		</b>
+		</td></tr></table><br>
+		STEP 3: Checkout the source branch and merge in the changes from the target branch. Resolve conflicts.<br></p>
+		<table bgcolor="#E6E6E6"><tr><td>
+		<b>
+		git checkout "${env.BRANCH}"<br>
+		git pull origin "${env.BRANCH}"<br>
+		git pull origin "${env.PRDESTINATION}"<br>
+		</b>
+		</td></tr></table>
+		<p>
+		Step 4: After the merge conflicts are resolved, stage the changes accordingly, commit the changes and push.<br>
+		<table bgcolor="#E6E6E6"><tr><td>
+		<b>
+		git commit -m "[JIRA-ID]:[Merge message]"<br>
+		git push origin HEAD<br>
+		</b>
+		</td></tr></table>
+		</p>
+		</br><p>Check console output at "<a href="${env.BUILD_URL}">${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>"</p>
+		<br></br>Regards,</br>B2B Tech Support.</br></br>KPNB2BTechSupport@cognizant.com</p>
+	"""
+	stage($stagename){
+		emailext (
+			mimeType: 'text/html',
+			subject: subject,
+			body: details,
+			to: recipient
+		) 
+	}
+}
